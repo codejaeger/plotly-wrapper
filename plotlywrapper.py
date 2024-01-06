@@ -131,6 +131,13 @@ class BasePlotter:
             )
         return self
     
+    def remove_axis_points(self, rows=None, cols=None):
+        for r, c in self.parse_update_indices(rows, cols):
+            self.fig.update_layout(showlegend=False)
+            self.fig.update_xaxes(visible=False)
+            self.fig.update_yaxes(visible=False)
+        return self
+    
     def remove_legend(self, rows=None, cols=None):
         self.fig.update_layout(showlegend=False)
         for r, c in self.parse_update_indices(rows, cols):
@@ -163,6 +170,31 @@ class BasePlotter:
             self.fig = self.fig.update_yaxes(showgrid=False, 
                                   row=r, col=c
                                  )
+        return self
+    
+    def white_pub_grid(self, rows=None, cols=None):
+        self.fig.update_layout(
+                plot_bgcolor='white'
+            )
+        for r, c in self.parse_update_indices(rows, cols):
+            self.fig = self.fig.update_xaxes(
+                mirror=True,
+                ticks='outside',
+                showline=True,
+                linecolor='black',
+                gridcolor='lightgrey', 
+                row=r, 
+                col=c
+            )
+            self.fig = self.fig.update_yaxes(
+                mirror=True,
+                ticks='outside',
+                showline=True,
+                linecolor='black',
+                gridcolor='lightgrey',
+                row=r,
+                col=c
+            )
         return self
     
     def update_size(self, width=320, height=320, l=10, r=10, t=10, b=10, pad=1):
@@ -417,9 +449,10 @@ class Scatter2D(Plotter):
     hoverinfo - whether hovering over points show additional information
     mode - use markers or lines for scatter plot
     """
-    def __init__(self, pts, size=None, color=None, opacity=1, text=None, hoverinfo=None, mode="markers", **kwargs):
+    def __init__(self, pts, size=None, color=None, opacity=1, smoothing=None, text=None, hoverinfo=None, mode="markers", **kwargs):
         self.pts, self.size, self.color, self.opacity, self.text, self.mode= pts, size, color, opacity, text, mode
         self.hoverinfo, self.hovertext = hoverinfo, None
+        self.smoothing = smoothing
         self.kwargs = kwargs
         
         if text is not None:
@@ -434,9 +467,14 @@ class Scatter2D(Plotter):
     def reset(self):
         """Reset plot to reflect original set of inputs passed during initialisation.
         """
-        self.gobjs = (go.Scatter(x=self.pts[:, 0], y=self.pts[:, 1], mode=self.mode, marker=dict(
-        size=self.size, color=self.color, opacity=self.opacity, showscale=False), hoverinfo=self.hoverinfo, hovertext=self.hovertext, 
-                                **self.kwargs),)
+        if self.mode == 'markers':
+            self.gobjs = (go.Scatter(x=self.pts[:, 0], y=self.pts[:, 1], mode=self.mode, marker=dict(
+            size=self.size, color=self.color, opacity=self.opacity, showscale=False), hoverinfo=self.hoverinfo, hovertext=self.hovertext, 
+                                    **self.kwargs),)
+        elif self.mode == 'lines':
+            self.gobjs = (go.Scatter(x=self.pts[:, 0], y=self.pts[:, 1], mode=self.mode, line=dict(
+            color=self.color, smoothing=self.smoothing), hoverinfo=self.hoverinfo, hovertext=self.hovertext, 
+                                    **self.kwargs),)
         return self
     
 class Wireframe(Plotter):
@@ -500,13 +538,13 @@ class Wireframe(Plotter):
               color=self.color), hoverinfo=self.hoverinfo, **self.kwargs),)
         return self
     
-class Image(Plotter):
+class PWImage(Plotter):
     """Feed in numpy uint8 image array. 
     Dimensions: (h x w) or (h x w x 3)
     """
     def __init__(self, img, dx=None, dy=None, opacity=None):
         self.img, self.dx, self.dy, self.opacity = img, dx, dy, opacity
-        if len(self.image.shape) == 2:
+        if len(self.img.shape) == 2:
             self.img = self.img[:, :, np.newaxis]
             self.img  = np.concatenate([self.img, self.img, self.img], axis=-1)
         self.reset(dx, dy)
@@ -520,6 +558,35 @@ class Image(Plotter):
 
     def update_size(self, dx=None, dy=None):
         self.reset(dx, dy)
+        return self
+    
+class AreaShade2DLinePlot(Plotter):
+    """Feed in 4 arrays - x, y and standard deviation on either side.
+    https://plotly.com/python/filled-area-plots/"""
+    def __init__(self, x, y, s1, s2, dx=None, dy=None, color=None, width=None, opacity=None):
+        self.x, self.y, self.s1, self.s2 = x, y, s1, s2
+        self.color, self.opacity, self.width = color, opacity, width
+        self.dx, self.dy = dx, dy
+        self.reset(dx, dy)
+        self.specs = [[{'type': 'xy'}]]
+        self.attrs = [[{'has_colorbar': False}]]
+        super().__init__(self.gobjs, self.specs, self.attrs)
+        
+    def reset(self, dx, dy):
+        self.gobjs = (go.Scatter(x=self.x, y=self.y+self.s2,
+                                     mode='lines',
+                                     line=dict(color=self.color, width = self.width),
+                                     name=''),
+                      go.Scatter(x=self.x, y=self.y,
+                         mode='lines',
+                         line=dict(color=self.color),
+                         fill='tonexty',
+                         name='training error'),
+                      go.Scatter(x=self.x, y=self.y-self.s1,
+                         mode='lines',
+                         line=dict(color=self.color, width = self.width),
+                         fill='tonexty',
+                         name='standard deviation'))
         return self
     
 class Heatmap(Plotter):
@@ -546,3 +613,48 @@ class Heatmap(Plotter):
         self.gobjs = (go.Surface(z=self.hm, opacity=self.opacity),)
         self.fig = self.make_subplot()
         return self
+    
+class PolarPlot(Plotter):
+    """Feed in a numpy array.
+    """
+    def __init__(self, r, theta, dr=None, r0=None, dtheta=None, theta0=None, auto_uniform=False, color=None, colorscale=None, showscale=None, size=None, mode="marker"):
+        self.r, self.r0, self.dr = r, r0, dr
+        self.color, self.colorscale, self.showscale = color, colorscale, showscale
+        self.size = size
+        self.theta, self.theta0, self.dtheta = theta, theta0, dtheta
+        self.mode = mode
+        if auto_uniform:
+            # todo
+            pass
+        self.colorscale = None
+        if not isinstance(color, str) and color is not None and len(self.color.shape) == 2:
+            self.colorscale = []
+            colors = []
+            for indx, c in enumerate(color):
+                # ToDo: Error when color is a single element array!
+                self.colorscale.append([indx/(len(color)-1), label_rgb(tuple(c))])
+                colors.append(indx/(len(color)-1))
+            self.color = colors
+            self.showscale = False
+        self.reset()
+        self.specs = [[{'type': 'polar'}]]
+        self.attrs = [[{'has_colorbar': False}]]
+        super().__init__(self.gobjs, self.specs, self.attrs)
+        
+    def reset(self):
+        self.gobjs = (go.Scatterpolar(
+                r = self.r,
+                r0 = self.r0,
+                dr = self.dr,
+                theta0 = self.theta0,
+                dtheta = self.dtheta,
+                theta = self.theta,
+                mode = 'markers',
+                marker=dict(size=self.size,
+                            color=self.color, 
+                            colorscale=self.colorscale, 
+                            showscale=self.showscale)
+            ),)
+        return self
+
+        
